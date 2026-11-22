@@ -193,3 +193,161 @@ class User(Base):
     password = Column(String(128), nullable=False)
     role = Column(String(32), nullable=False)
     token = Column(String(128), nullable=False)
+
+
+# ======================================================================
+# 会员门店归属历史与权益成本归因（第二域，全部为事件账的可重建投影）
+# ======================================================================
+
+class Store(Base):
+    """门店目录投影：仅索引已知门店，不保存会覆盖历史的“当前组织”字段。"""
+
+    __tablename__ = "stores"
+
+    store_key = Column(String(64), primary_key=True)
+    display_name = Column(String(128))
+    first_seen_event_id = Column(BigInteger)
+
+
+class ServiceRelation(Base):
+    """服务关系账投影：会员选择/处方服务/到店消费/线上履约/门店确认。
+
+    双时间（biz_time 发生时间 / ingested_at 证据到达时间）+ 证据等级 + 撤销链。
+    撤销不删行：status 置 revoked 并记录撤销事件与撤销到达时间。
+    """
+
+    __tablename__ = "service_relations"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    event_id = Column(BigInteger, ForeignKey("events.id"), nullable=False)
+    member_key = Column(String(64), nullable=False, index=True)
+    store_key = Column(String(64), nullable=False, index=True)
+    relation_type = Column(String(24), nullable=False)
+    # member_choice 会员选择 | prescription 处方服务 | instore_visit 到店消费
+    # online_fulfillment 线上履约 | store_confirmation 门店确认
+    evidence_grade = Column(Integer, nullable=False)  # 1 低 ... 5 高
+    biz_time = Column(DateTime(timezone=True), nullable=False)
+    ingested_at = Column(DateTime(timezone=True), nullable=False)
+    weight_hint = Column(Numeric(8, 4), nullable=False, default=1)  # 可解释权重（服务类别基权）
+    status = Column(String(16), nullable=False, default="active")  # active | revoked
+    revoke_event_id = Column(BigInteger, nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    detail = Column(JSONB, nullable=False, default=dict)
+
+
+class OrgInterval(Base):
+    """组织沿革图投影：门店开闭、加盟归属、区域调整、合并拆分的双时间有效区间。
+
+    change: open | close | franchise_join | franchise_exit | region_adjust | merge | split
+    合并/拆分以 target_store 指向被合并门店；merge 行在拆分事件到达时闭合（沿用身份图语义）。
+    """
+
+    __tablename__ = "org_intervals"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    event_id = Column(BigInteger, ForeignKey("events.id"), nullable=False)
+    store_key = Column(String(64), nullable=False, index=True)
+    change = Column(String(24), nullable=False)
+    owner_key = Column(String(64), nullable=True)  # 加盟主体
+    region_code = Column(String(64), nullable=True)  # 区域
+    target_store = Column(String(64), nullable=True)  # merge/split 关联门店
+    biz_from = Column(DateTime(timezone=True), nullable=False)
+    biz_to = Column(DateTime(timezone=True), nullable=True)
+    sys_from = Column(DateTime(timezone=True), nullable=False)
+    sys_to = Column(DateTime(timezone=True), nullable=True)
+    status = Column(String(16), nullable=False, default="active")  # active | closed | merged | split
+    reason = Column(Text)
+
+
+class BudgetPeriod(Base):
+    """预算周期 + 预算口径（是否允许分摊、结算精度、证据覆盖率门槛）。"""
+
+    __tablename__ = "budget_periods"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    period_key = Column(String(32), unique=True, nullable=False)  # 如 2026-02
+    biz_from = Column(DateTime(timezone=True), nullable=False)
+    biz_to = Column(DateTime(timezone=True), nullable=False)
+    allow_apportion = Column(Boolean, nullable=False, default=False)
+    precision_cents = Column(Integer, nullable=False, default=2)  # 结算小数精度（分）
+    coverage_threshold = Column(Numeric(6, 4), nullable=False, default=0.60)  # 证据覆盖率门槛
+    status = Column(String(16), nullable=False, default="open")  # open | locked
+    locked_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class BenefitCost(Base):
+    """权益成本台账：会员等级/积分/生日券等权益在预算期产生的成本（按类别）。"""
+
+    __tablename__ = "benefit_costs"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    period_key = Column(String(32), nullable=False, index=True)
+    member_key = Column(String(64), nullable=False, index=True)
+    benefit_type = Column(String(24), nullable=False)  # tier | points | birthday_coupon
+    amount = Column(Numeric(14, 2), nullable=False)
+    rule_version_tag = Column(String(64), nullable=False)  # 规则版本标签（成本适用规则）
+    source_event_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+
+
+class AttributionRun(Base):
+    """归属结算单：一次成本归属计算的冻结头（策略与组织版本冻结于此）。"""
+
+    __tablename__ = "attribution_runs"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    period_key = Column(String(32), nullable=False, index=True)
+    strategy = Column(String(16), nullable=False)  # single_store | apportion
+    sys_as_of = Column(DateTime(timezone=True), nullable=False)  # 系统水位（证据可见口径）
+    org_graph_version = Column(BigInteger, nullable=False)  # 组织沿革图冻结版本(最大组织事件id)
+    rule_set_version = Column(BigInteger, nullable=False)  # 规则集合冻结版本(最大规则事件id)
+    watermark_event_id = Column(BigInteger, nullable=False)  # 证据水位(最大可见事件id)
+    total_cost = Column(Numeric(14, 2), nullable=False, default=0)
+    allocated_cost = Column(Numeric(14, 2), nullable=False, default=0)
+    unallocated_cost = Column(Numeric(14, 2), nullable=False, default=0)
+    status = Column(String(16), nullable=False, default="settled")  # settled | superseded
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    note = Column(Text)
+
+
+class AttributionLine(Base):
+    """归属行：权益成本到门店/区域/规则版本/预算周期的关联（含待裁定与残差）。"""
+
+    __tablename__ = "attribution_lines"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    run_id = Column(BigInteger, ForeignKey("attribution_runs.id"), nullable=False, index=True)
+    period_key = Column(String(32), nullable=False)
+    member_key = Column(String(64), nullable=False)
+    benefit_type = Column(String(24), nullable=False)
+    cost_id = Column(BigInteger, nullable=False)  # 逻辑外键 -> benefit_costs.id（投影可重建，不设硬 FK）
+    store_key = Column(String(64), nullable=True)  # 待裁定时为空
+    region_code = Column(String(64), nullable=True)
+    rule_version_tag = Column(String(64), nullable=False)
+    amount = Column(Numeric(14, 2), nullable=False, default=0)
+    share = Column(Numeric(10, 6), nullable=False, default=0)  # 服务份额
+    status = Column(String(32), nullable=False)
+    # allocated 已归属 | pending_adjudication 待裁定 | unallocated 未分配范围 | residual 小数残差
+    evidence_event_ids = Column(JSONB, nullable=False, default=list)
+    basis = Column(JSONB, nullable=False, default=dict)  # 计算依据（证据、权重、覆盖率）
+    reason = Column(Text)
+
+
+class SettlementAdjustment(Base):
+    """结算调整版本：组织修订或迟到服务证据影响既有（已锁定）预算时签发。
+
+    原结算保留不动（run 置 superseded 仅标记，行不修改），调整以新版本承载差额。
+    """
+
+    __tablename__ = "settlement_adjustments"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    period_key = Column(String(32), nullable=False, index=True)
+    original_run_id = Column(BigInteger, ForeignKey("attribution_runs.id"), nullable=False)
+    adjustment_run_id = Column(BigInteger, ForeignKey("attribution_runs.id"), nullable=False)
+    reason_kind = Column(String(24), nullable=False)  # org_revision | late_evidence
+    trigger_event_ids = Column(JSONB, nullable=False, default=list)
+    delta_amount = Column(Numeric(14, 2), nullable=False)
+    detail = Column(JSONB, nullable=False, default=dict)  # 按门店/区域的差额明细
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    note = Column(Text)

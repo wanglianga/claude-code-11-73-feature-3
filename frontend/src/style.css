@@ -40,6 +40,7 @@ tr:hover td { background: #f8fafc; }
 .tag.PLATINUM { background: #dbeafe; color: #1d4ed8; font-weight: 700; }
 .tag.ok { background: #dcfce7; color: var(--green); }
 .tag.bad { background: #fee2e2; color: var(--red); }
+.tag.silver { background: #e2e8f0; color: #475569; font-weight: 700; }
 input, select, textarea { padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; font-family: inherit; }
 button { padding: 7px 14px; border: none; border-radius: 6px; background: var(--primary); color: #fff; font-size: 13px; cursor: pointer; }
 button.ghost { background: #e2e8f0; color: var(--text); }

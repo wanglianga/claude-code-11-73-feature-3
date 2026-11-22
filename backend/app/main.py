@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .db import engine, get_db
+from .routers import attribution_api
 from .seed import seed as run_seed
 from .services import diff as diff_svc
 from .services import ledger
@@ -16,13 +17,14 @@ from .services.eligibility import compute_eligibility
 from .services.identity import cluster_at
 from .services.publications import create_publication
 
-app = FastAPI(title="双时间会员资格历史服务", version="1.0.0")
+app = FastAPI(title="双时间会员资格与门店归属历史服务", version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(attribution_api.router)
 
 
 @app.on_event("startup")
@@ -442,7 +444,9 @@ def reset_all(db: Session = Depends(get_db), user=Depends(current_user)):
     db.execute(
         text(
             "TRUNCATE events, identity_edges, rule_versions, rule_withdrawals, member_directory, "
-            "publications, publication_rows, diffs, diff_items, impacts RESTART IDENTITY CASCADE"
+            "publications, publication_rows, diffs, diff_items, impacts, "
+            "stores, service_relations, org_intervals, budget_periods, benefit_costs, "
+            "attribution_runs, attribution_lines, settlement_adjustments RESTART IDENTITY CASCADE"
         )
     )
     db.execute(text("SET session_replication_role = 'origin'"))
@@ -461,5 +465,12 @@ def overview(db: Session = Depends(get_db), user=Depends(current_user)):
         "publications": db.query(models.Publication).count(),
         "diffs": db.query(models.Diff).count(),
         "impacts": db.query(models.Impact).count(),
+        "stores": db.query(models.Store).count(),
+        "service_relations": db.query(models.ServiceRelation).count(),
+        "org_intervals": db.query(models.OrgInterval).count(),
+        "budget_periods": db.query(models.BudgetPeriod).count(),
+        "benefit_costs": db.query(models.BenefitCost).count(),
+        "attribution_runs": db.query(models.AttributionRun).count(),
+        "settlement_adjustments": db.query(models.SettlementAdjustment).count(),
         "ledger": ledger.verify_chain(db),
     }

@@ -87,6 +87,7 @@ def ingest_event(
 
 def apply_to_projections(db: Session, ev: models.Event) -> None:
     """按事件类型更新投影表（投影 = 事件的物化缓存，可重建）。"""
+    from . import attribution as attr_svc
     from . import identity, rules  # 延迟导入避免循环
 
     if ev.event_type == "transaction":
@@ -110,17 +111,47 @@ def apply_to_projections(db: Session, ev: models.Event) -> None:
                 db.add(models.MemberDirectory(member_key=k, first_seen_event_id=ev.id))
     elif ev.event_type in ("rule_upsert", "rule_withdraw"):
         rules.apply_rule_event(db, ev)
+    elif ev.event_type in attr_svc.SERVICE_EVENT_TYPES:
+        attr_svc.apply_service_event(db, ev)
+    elif ev.event_type in attr_svc.ORG_EVENT_TYPES:
+        attr_svc.apply_org_event(db, ev)
+    elif ev.event_type == "budget_period_define":
+        attr_svc.apply_budget_event(db, ev)
+    elif ev.event_type == "benefit_cost":
+        attr_svc.apply_benefit_cost_event(db, ev)
 
 
 def rebuild_projections(db: Session) -> dict:
-    """从事件账全量重放，重建所有投影。证明投影可重建、账本是唯一事实来源。"""
+    """从事件账全量重放，重建所有可重放投影。证明投影可重建、账本是唯一事实来源。
+
+    归属结算单/归属行/调整版本与 publications/diffs/impacts 同属冻结产物，
+    不在重建范围（其跨表引用均为逻辑 id 或 JSONB 快照，不设入站硬外键）；
+    事件按追加序重放后 benefit_costs 等主键 id 确定性复原，逻辑引用保持有效。
+    """
     for tbl in (
+        models.BenefitCost,
+        models.BudgetPeriod,
+        models.ServiceRelation,
+        models.OrgInterval,
+        models.Store,
         models.IdentityEdge,
-        models.RuleVersion,
         models.RuleWithdrawal,
+        models.RuleVersion,
         models.MemberDirectory,
     ):
         db.query(tbl).delete()
+    # 重置代理主键序列：重放必须复现与首次构建相同的 id，
+    # 冻结结算行中的逻辑引用（attribution_lines.cost_id）才能保持有效。
+    for seq in (
+        "benefit_costs_id_seq",
+        "budget_periods_id_seq",
+        "service_relations_id_seq",
+        "org_intervals_id_seq",
+        "identity_edges_id_seq",
+        "rule_versions_id_seq",
+        "rule_withdrawals_id_seq",
+    ):
+        db.execute(text(f"ALTER SEQUENCE {seq} RESTART WITH 1"))
     db.flush()
     events = db.execute(select(models.Event).order_by(models.Event.id)).scalars().all()
     for ev in events:
@@ -133,6 +164,10 @@ def rebuild_projections(db: Session) -> dict:
         "rule_versions": db.query(models.RuleVersion).count(),
         "rule_withdrawals": db.query(models.RuleWithdrawal).count(),
         "members": db.query(models.MemberDirectory).count(),
+        "service_relations": db.query(models.ServiceRelation).count(),
+        "org_intervals": db.query(models.OrgInterval).count(),
+        "budget_periods": db.query(models.BudgetPeriod).count(),
+        "benefit_costs": db.query(models.BenefitCost).count(),
     }
 
 

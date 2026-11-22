@@ -9,6 +9,11 @@
       <div class="stat"><div class="num">{{ ov.publications }}</div><div class="label">发布快照</div></div>
       <div class="stat"><div class="num">{{ ov.diffs }}</div><div class="label">差异归因</div></div>
       <div class="stat"><div class="num">{{ ov.impacts }}</div><div class="label">下游影响</div></div>
+      <div class="stat"><div class="num">{{ ov.service_relations ?? 0 }}</div><div class="label">服务关系证据</div></div>
+      <div class="stat"><div class="num">{{ ov.org_intervals ?? 0 }}</div><div class="label">组织沿革区间</div></div>
+      <div class="stat"><div class="num">{{ ov.budget_periods ?? 0 }}</div><div class="label">预算周期</div></div>
+      <div class="stat"><div class="num">{{ ov.attribution_runs ?? 0 }}</div><div class="label">归属结算单</div></div>
+      <div class="stat"><div class="num">{{ ov.settlement_adjustments ?? 0 }}</div><div class="label">结算调整版本</div></div>
       <div class="stat">
         <div class="num">
           <span v-if="ov.ledger" :class="['tag', ov.ledger.ok ? 'ok' : 'bad']">
